@@ -17,7 +17,9 @@ use std::{
     time::Duration,
 };
 
-type Coord = (isize, isize);
+mod universe; // 告诉编译器去加载同级目录下的 universe.rs
+
+use universe::{Coord, Universe};
 
 const CELL_SIZE: f64 = 16.0;
 const GRID_W: isize = 50;
@@ -28,46 +30,6 @@ enum SimCommand {
     ToggleCell(Coord),
     TogglePause,
     Clear,
-}
-
-struct Universe {
-    alive: HashSet<Coord>,
-}
-
-impl Universe {
-    fn from_cells<I>(cells: I) -> Self
-    where
-        I: IntoIterator<Item = Coord>,
-    {
-        Self {
-            alive: cells.into_iter().collect(),
-        }
-    }
-
-    fn neighbors((x, y): Coord) -> impl Iterator<Item = Coord> {
-        (-1..=1)
-            .flat_map(move |dy| (-1..=1).map(move |dx| (dx, dy)))
-            .filter(|&(dx, dy)| dx != 0 || dy != 0)
-            .map(move |(dx, dy)| (x + dx, y + dy))
-    }
-
-    fn tick(&mut self) {
-        let mut neighbor_counts: HashMap<Coord, u8> = HashMap::new();
-
-        for &cell in &self.alive {
-            for neighbor in Self::neighbors(cell) {
-                *neighbor_counts.entry(neighbor).or_insert(0) += 1;
-            }
-        }
-
-        self.alive = neighbor_counts
-            .into_iter()
-            .filter(|&(pos, count)| {
-                matches!((self.alive.contains(&pos), count), (true, 2 | 3) | (false, 3))
-            })
-            .map(|(pos, _)| pos)
-            .collect();
-    }
 }
 
 fn main() {
