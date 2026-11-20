@@ -1,6 +1,7 @@
 use crate::universe::{Coord, Rule, Snapshot, Universe};
 use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
+use std::sync::Arc;
 use std::collections::VecDeque;
 
 const MAX_HISTORY: usize = 200;
@@ -9,6 +10,7 @@ const MAX_INTERVAL: Duration = Duration::from_millis(1000);
 
 pub enum SimCommand {
     SetCell(Coord, bool),
+    PlacePattern(Coord, Arc<Vec<Coord>>), // 新增：批量放置图样
     TogglePause,
     Step,              // 单步推演一代
     Rewind,            // 时光倒流一步
@@ -139,6 +141,14 @@ impl Simulation{
             }
             SimCommand::SetRule(rule) => {
                 self.universe.set_rule(rule);
+                true
+            }
+            SimCommand::PlacePattern(origin, cells) => {
+                if self.history.len() == MAX_HISTORY {
+                    self.history.pop_front();
+                }
+                self.history.push_back(self.current_snapshot());
+                self.universe.place_pattern(origin, &cells);
                 true
             }
         }

@@ -7,10 +7,13 @@ Any live cell with two or three live neighbours lives, unchanged, to the next ge
 Any dead cell with exactly three live neighbours comes to life.
 a method get live neighbours
 live -> 1 dead -> 0
+
+download rle file from this wiki: https://conwaylife.com/wiki/
  */
 mod universe; // 告诉编译器去加载同级目录下的 universe.rs
 mod gui;
 mod sim;
+mod pattern;
 
 use crossbeam::channel::{bounded, unbounded};
 use sim::Simulation;

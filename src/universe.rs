@@ -149,4 +149,10 @@ impl Universe {
 
         self.generation += 1;
     }
+
+    pub fn place_pattern(&mut self, (ox, oy): Coord, pattern_cells: &[Coord]){
+        for &(dx, dy) in pattern_cells {
+            self.alive.insert((ox + dx, oy + dy));
+        }
+    }
 }

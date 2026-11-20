@@ -4,6 +4,7 @@ use crate::{
 use crossbeam::channel::{Receiver, Sender};
 use piston_window::*;
 use std::{collections::HashSet, sync::Arc};
+use crate::pattern::Pattern;
 
 const MIN_CELL_SIZE: f64 = 2.0;
 const MAX_CELL_SIZE: f64 = 64.0;
@@ -64,6 +65,10 @@ const SCREEN_WIDTH: u32 = 960;
 const SCREEN_HEIGHT: u32 = 720; 
 
 pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
+    let presets = Pattern::presets();
+    let mut active_pattern: Option<Pattern> = None;
+    let mut shift_held = false;
+
     let mut window: PistonWindow = WindowSettings::new(
         "Game of Life",
         [SCREEN_WIDTH, SCREEN_HEIGHT],
@@ -114,6 +119,26 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
             cursor_pos = pos;
         }
 
+        // 0. 监听系统文件拖拽（直接把 .rle 文件拖进窗口即可加载）
+        if let Event::Input(Input::FileDrag(FileDrag::Drop(path)), _) = &event {
+            match Pattern::from_file(path) {
+                Ok(pat) => {
+                    active_pattern = Some(pat);
+                    paint_brush = None;
+                    hud_dirty = true;
+                }
+                Err(err) => eprintln!("导入 RLE 失败: {}", err),
+            }
+        }
+
+        // 记录 Shift 键状态（支持按住 Shift 连续盖章）
+        if let Some(Button::Keyboard(Key::LShift | Key::RShift)) = event.press_args() {
+            shift_held = true;
+        }
+        if let Some(Button::Keyboard(Key::LShift | Key::RShift)) = event.release_args() {
+            shift_held = false;
+        }
+
         // 3. 处理鼠标滚轮缩放
         if let Some(scroll) = event.mouse_scroll_args() {
             if scroll[1] != 0.0 {
@@ -128,15 +153,79 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
             match button {
                 Button::Mouse(MouseButton::Left) => {
                     let coord = camera.screen_to_world(cursor_pos);
-                    // 根据起始格子的当前状态决定本次拖拽是“绘制”还是“擦除”
-                    let target_alive = !snapshot.cells.contains(&coord);
-                    paint_brush = Some(target_alive);
-                    last_painted = Some(coord);
-                    let _ = cmd_tx.send(SimCommand::SetCell(coord, target_alive));
+                    if let Some(pat) = &active_pattern {
+                        // 处于图样印章模式：批量放置图样
+                        let _ = cmd_tx.send(SimCommand::PlacePattern(coord, Arc::clone(&pat.cells)));
+                        if !shift_held {
+                            active_pattern = None;
+                            hud_dirty = true;
+                        }
+                    } else {
+                        // 普通绘制/擦除模式
+                        let target_alive = !snapshot.cells.contains(&coord);
+                        paint_brush = Some(target_alive);
+                        last_painted = Some(coord);
+                        let _ = cmd_tx.send(SimCommand::SetCell(coord, target_alive));
+                    }
                 }
-                Button::Mouse(MouseButton::Right | MouseButton::Middle) => {
+                Button::Mouse(MouseButton::Right) => {
+                    if active_pattern.is_some() {
+                        // 右键优先取消当前图样预览
+                        active_pattern = None;
+                        hud_dirty = true;
+                    } else {
+                        is_panning = true;
+                    }
+                }
+                Button::Mouse(MouseButton::Middle) => {
                     is_panning = true;
                 }
+                // 数字键 1~5 选择预设图样
+                Button::Keyboard(key @ (Key::D1 | Key::D2 | Key::D3 | Key::D4 | Key::D5)) => {
+                    let idx = match key {
+                        Key::D1 => 0,
+                        Key::D2 => 1,
+                        Key::D3 => 2,
+                        Key::D4 => 3,
+                        Key::D5 => 4,
+                        _ => 0,
+                    };
+                    if let Some(pat) = presets.get(idx) {
+                        active_pattern = Some(pat.clone());
+                        paint_brush = None;
+                        hud_dirty = true;
+                    }
+                }
+                // R 旋转 / F 翻转 / Backspace 取消图样
+                Button::Keyboard(Key::R) => {
+                    if let Some(pat) = &mut active_pattern {
+                        pat.rotate_cw();
+                    }
+                }
+                Button::Keyboard(Key::F) => {
+                    if let Some(pat) = &mut active_pattern {
+                        pat.flip_horizontal();
+                    }
+                }
+                Button::Keyboard(Key::Backspace) => {
+                    if active_pattern.take().is_some() {
+                        hud_dirty = true;
+                    }
+                }
+                // F1~F4
+                Button::Keyboard(Key::F1) => {
+                    let _ = cmd_tx.send(SimCommand::SetRule(Rule::CONWAY));
+                }
+                Button::Keyboard(Key::F2) => {
+                    let _ = cmd_tx.send(SimCommand::SetRule(Rule::HIGH_LIFE));
+                }
+                Button::Keyboard(Key::F3) => {
+                    let _ = cmd_tx.send(SimCommand::SetRule(Rule::SEEDS));
+                }
+                Button::Keyboard(Key::F4) => {
+                    let _ = cmd_tx.send(SimCommand::SetRule(Rule::DAY_AND_NIGHT));
+                }
+
                 Button::Keyboard(Key::Space) => {
                     let _ = cmd_tx.send(SimCommand::TogglePause);
                 }
@@ -162,18 +251,6 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
                     // 间隔延长为 1.33 倍 -> 速度放慢
                     let _ = cmd_tx.send(SimCommand::AdjustSpeed(1.33));
                 }
-                Button::Keyboard(Key::D1) => {
-                    let _ = cmd_tx.send(SimCommand::SetRule(crate::universe::Rule::CONWAY));
-                }
-                Button::Keyboard(Key::D2) => {
-                    let _ = cmd_tx.send(SimCommand::SetRule(crate::universe::Rule::HIGH_LIFE));
-                }
-                Button::Keyboard(Key::D3) => {
-                    let _ = cmd_tx.send(SimCommand::SetRule(crate::universe::Rule::SEEDS));
-                }
-                Button::Keyboard(Key::D4) => {
-                    let _ = cmd_tx.send(SimCommand::SetRule(crate::universe::Rule::DAY_AND_NIGHT));
-                }
                 _ => {}
             }
         }
@@ -196,15 +273,18 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
         if hud_dirty {
             let status = if snapshot.paused { "PAUSED" } else { "RUNNING" };
             let tps = 1000.0 / (snapshot.interval_ms.max(1) as f64);
+            let stamp_info = match &active_pattern {
+                Some(pat) => format!(" | Stamp: {} [R:旋转 F:翻转 左键:放置 右键:取消]", pat.name),
+                None => String::new(),
+            };
             let title = format!(
-                "Game of Life [{}] | Rule: {} ({}) | Gen: {} | Pop: {} | Speed: {:.1} TPS | Zoom: {:.0}%",
+                "Game of Life [{}] | Rule: {} | Gen: {} | Pop: {} | {:.1} TPS{}",
                 status,
                 snapshot.rule.name,
-                snapshot.rule.notation,
                 snapshot.generation,
                 snapshot.cells.len(),
                 tps,
-                (camera.cell_size / DEFAULT_CELL_SIZE) * 100.0
+                stamp_info
             );
             window.set_title(title);
             hud_dirty = false;
@@ -217,6 +297,12 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
 
             draw_grid(&camera, win_w, win_h, &context, graphics);
             draw_cells(&camera, &snapshot.cells, win_w, win_h, &context, graphics);
+
+            // 如果当前选中了图样印章，在光标处绘制半透明预览
+            if let Some(pat) = &active_pattern {
+                let hover_coord = camera.screen_to_world(cursor_pos);
+                draw_ghost_pattern(&camera, hover_coord, &pat.cells, &context, graphics);
+            }
         });
     }
 
@@ -260,6 +346,18 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
                     graphics,
                 );
             }
+        }
+    }
+
+    fn draw_ghost_pattern<G: Graphics>(camera: &Camera, (ox, oy): Coord, cells: &[Coord], context: &Context, graphics: &mut G){
+        // 琥珀色半透明幽灵预览（RGBA 最后一个分量 0.45 为透明度）
+        let ghost_color = [0.95, 0.75, 0.25, 0.45];
+        let inset = if camera.cell_size >= 8.0 { 1.0 } else { 0.0 };
+        let size = (camera.cell_size - inset * 2.0).max(1.0);
+
+        for &(dx, dy) in cells {
+            let [px, py] = camera.world_to_screen((ox + dx, oy + dy));
+            rectangle(ghost_color, [px + inset, py + inset, size, size], context.transform, graphics);
         }
     }
 }
