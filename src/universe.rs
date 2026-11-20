@@ -2,10 +2,18 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub type Coord = (isize, isize);
-pub type Snapshot = Arc<HashSet<Coord>>;
+
+/// 携带元数据的只读快照
+#[derive(Clone)]
+pub struct Snapshot {
+    pub cells: Arc<HashSet<Coord>>,
+    pub generation: u64,
+    pub paused: bool,
+}
 
 pub struct Universe {
     pub alive: HashSet<Coord>,
+    generation: u64,
 }
 
 impl Universe {
@@ -15,26 +23,29 @@ impl Universe {
     {
         Self {
             alive: cells.into_iter().collect(),
+            generation: 0,
         }
     }
 
-    pub fn snapshot(&self) -> Snapshot {
-        Arc::new(self.alive.clone())
+    pub fn snapshot(&self, paused: bool) -> Snapshot {
+        Snapshot {
+            cells: Arc::new(self.alive.clone()),
+            generation: self.generation,
+            paused,
+        }
     }
 
-    pub fn toggle_cell(&mut self, coord: Coord) {
-        if !self.alive.remove(&coord) {
+    pub fn set_cell(&mut self, coord: Coord, is_alive: bool){
+        if is_alive {
             self.alive.insert(coord);
+        } else {
+            self.alive.remove(&coord);
         }
     }
 
     pub fn clear(&mut self) {
         self.alive.clear();
-    }
-
-    /// 提供只读视图供外部克隆快照
-    pub fn alive_cells(&self) -> &HashSet<Coord> {
-        &self.alive
+        self.generation = 0;
     }
 
     fn neighbors((x, y): Coord) -> impl Iterator<Item = Coord> {
@@ -60,5 +71,7 @@ impl Universe {
             })
             .map(|(pos, _)| pos)
             .collect();
+
+        self.generation += 1;
     }
 }

@@ -3,7 +3,7 @@ use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
 pub enum SimCommand {
-    ToggleCell(Coord),
+    SetCell(Coord, bool),
     TogglePause,
     Clear,
     SetInterval(Duration),
@@ -34,7 +34,7 @@ impl Simulation{
     }
 
     pub fn run(mut self){
-        let _ = self.state_tx.send(self.universe.snapshot());
+        let _ = self.state_tx.send(self.universe.snapshot(self.paused));
         let mut next_tick = Instant::now() + self.interval;
 
         loop {
@@ -75,8 +75,8 @@ impl Simulation{
     /// 处理控制指令，返回 true 表示世界状态发生变更需要重新渲染
     fn handle_command(&mut self, cmd: SimCommand, next_tick: &mut Instant) -> bool {
         match cmd {
-            SimCommand::ToggleCell(coord) => {
-                self.universe.toggle_cell(coord);
+            SimCommand::SetCell(coord, alive) => {
+                self.universe.set_cell(coord, alive);
                 true
             }
             SimCommand::TogglePause => {
@@ -100,6 +100,6 @@ impl Simulation{
     }
 
     fn publish_snapshot(&self){
-        let _ = self.state_tx.try_send(self.universe.snapshot());
+        let _ = self.state_tx.try_send(self.universe.snapshot(self.paused));
     }
 }
