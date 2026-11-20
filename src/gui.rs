@@ -1,4 +1,5 @@
 use crate::universe::{Coord, Snapshot};
+use crate::sim::SimCommand;
 use crossbeam::channel::{Receiver, Sender};
 use piston_window::*;
 use std::{collections::HashSet, sync::Arc};
@@ -6,12 +7,6 @@ use std::{collections::HashSet, sync::Arc};
 const CELL_SIZE: f64 = 16.0;
 const GRID_W: isize = 50;
 const GRID_H: isize = 38;
-
-pub enum SimCommand {
-    ToggleCell(Coord),
-    TogglePause,
-    Clear,
-}
 
 pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
     let width_px = (GRID_W as f64 * CELL_SIZE) as u32;
