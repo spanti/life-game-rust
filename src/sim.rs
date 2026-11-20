@@ -10,6 +10,7 @@ const MAX_INTERVAL: Duration = Duration::from_millis(1000);
 
 pub enum SimCommand {
     SetCell(Coord, bool),
+    SetCells(Vec<Coord>, bool), // 新增：批量设置细胞（对称画笔 / 随机汤）
     PlacePattern(Coord, Arc<Vec<Coord>>), // 新增：批量放置图样
     TogglePause,
     Step,              // 单步推演一代
@@ -98,6 +99,17 @@ impl Simulation{
         match cmd {
             SimCommand::SetCell(coord, alive) => {
                 self.universe.set_cell(coord, alive);
+                true
+            }
+            SimCommand::SetCells(coords, alive) => {
+                // 若一次性批量生成较多细胞（如随机汤），先存入历史栈方便按 Z 撤回
+                if coords.len() > 8 {
+                    if self.history.len() == MAX_HISTORY {
+                        self.history.pop_front();
+                    }
+                    self.history.push_back(self.current_snapshot());
+                }
+                self.universe.set_cells(coords, alive);
                 true
             }
             SimCommand::TogglePause => {

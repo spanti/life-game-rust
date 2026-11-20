@@ -109,6 +109,15 @@ impl Universe {
         self.rule = rule;
     }
 
+    pub fn set_cells<I>(&mut self, coords: I, is_alive: bool)
+    where 
+        I: IntoIterator<Item = Coord>,
+    {
+        for coord in coords {
+            self.set_cell(coord, is_alive);
+        }
+    }
+
     pub fn set_cell(&mut self, coord: Coord, is_alive: bool){
         if is_alive {
             self.alive.insert(coord);
