@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 pub type Coord = (isize, isize);
+pub type Snapshot = Arc<HashSet<Coord>>;
 
 pub struct Universe {
     pub alive: HashSet<Coord>,
@@ -14,6 +16,10 @@ impl Universe {
         Self {
             alive: cells.into_iter().collect(),
         }
+    }
+
+    pub fn snapshot(&self) -> Snapshot {
+        Arc::new(self.alive.clone())
     }
 
     pub fn toggle_cell(&mut self, coord: Coord) {
