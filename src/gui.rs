@@ -1,6 +1,5 @@
 use crate::{
-    sim::SimCommand,
-    universe::{Coord, Snapshot},
+    sim::SimCommand, universe::{Coord, Rule, Snapshot},
 };
 use crossbeam::channel::{Receiver, Sender};
 use piston_window::*;
@@ -77,6 +76,8 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
         cells: Arc::new(HashSet::new()),
         generation: 0,
         paused: false,
+        rule: Rule::CONWAY,
+        interval_ms: 60
     };
 
     let mut camera = Camera::new();
@@ -146,6 +147,33 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
                     camera.reset();
                     hud_dirty = true;
                 }
+                // 1. 键盘输入处理（在 match button 中补充）：
+                Button::Keyboard(Key::N | Key::Right) => {
+                    let _ = cmd_tx.send(SimCommand::Step);
+                }
+                Button::Keyboard(Key::Z | Key::Left) => {
+                    let _ = cmd_tx.send(SimCommand::Rewind);
+                }
+                Button::Keyboard(Key::Equals | Key::Plus | Key::Up) => {
+                    // 间隔缩短为 0.75 倍 -> 速度提升
+                    let _ = cmd_tx.send(SimCommand::AdjustSpeed(0.75));
+                }
+                Button::Keyboard(Key::Minus | Key::Down) => {
+                    // 间隔延长为 1.33 倍 -> 速度放慢
+                    let _ = cmd_tx.send(SimCommand::AdjustSpeed(1.33));
+                }
+                Button::Keyboard(Key::D1) => {
+                    let _ = cmd_tx.send(SimCommand::SetRule(crate::universe::Rule::CONWAY));
+                }
+                Button::Keyboard(Key::D2) => {
+                    let _ = cmd_tx.send(SimCommand::SetRule(crate::universe::Rule::HIGH_LIFE));
+                }
+                Button::Keyboard(Key::D3) => {
+                    let _ = cmd_tx.send(SimCommand::SetRule(crate::universe::Rule::SEEDS));
+                }
+                Button::Keyboard(Key::D4) => {
+                    let _ = cmd_tx.send(SimCommand::SetRule(crate::universe::Rule::DAY_AND_NIGHT));
+                }
                 _ => {}
             }
         }
@@ -167,11 +195,15 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
         // 6. 按需更新窗口标题栏 HUD
         if hud_dirty {
             let status = if snapshot.paused { "PAUSED" } else { "RUNNING" };
+            let tps = 1000.0 / (snapshot.interval_ms.max(1) as f64);
             let title = format!(
-                "Game of Life [{}] | Gen: {} | Pop: {} | Zoom: {:.0}%  (Space: 暂停 | 右键拖动: 平移 | 滚轮: 缩放 | Home: 归位)",
+                "Game of Life [{}] | Rule: {} ({}) | Gen: {} | Pop: {} | Speed: {:.1} TPS | Zoom: {:.0}%",
                 status,
+                snapshot.rule.name,
+                snapshot.rule.notation,
                 snapshot.generation,
                 snapshot.cells.len(),
+                tps,
                 (camera.cell_size / DEFAULT_CELL_SIZE) * 100.0
             );
             window.set_title(title);

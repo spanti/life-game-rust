@@ -1,18 +1,28 @@
-use crate::universe::{Coord, Snapshot, Universe};
+use crate::universe::{Coord, Rule, Snapshot, Universe};
 use crossbeam::channel::{Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
+use std::collections::VecDeque;
+
+const MAX_HISTORY: usize = 200;
+const MIN_INTERVAL: Duration = Duration::from_millis(5);
+const MAX_INTERVAL: Duration = Duration::from_millis(1000);
 
 pub enum SimCommand {
     SetCell(Coord, bool),
     TogglePause,
+    Step,              // 单步推演一代
+    Rewind,            // 时光倒流一步
     Clear,
-    SetInterval(Duration),
+    // SetInterval(Duration),
+    AdjustSpeed(f64),  // 速度倍率调整（如 0.75 加速，1.33 减速）
+    SetRule(Rule),     // 切换生命规则
 }
 
 pub struct Simulation {
     universe: Universe,
     paused: bool,
     interval: Duration,
+    history: VecDeque<Snapshot>,
     cmd_rx: Receiver<SimCommand>,
     state_tx: Sender<Snapshot>
 }
@@ -28,13 +38,14 @@ impl Simulation{
             universe,
             paused: false,
             interval,
+            history: VecDeque::with_capacity(MAX_HISTORY),
             cmd_rx,
             state_tx
         }
     }
 
     pub fn run(mut self){
-        let _ = self.state_tx.send(self.universe.snapshot(self.paused));
+        self.publish_snapshot();
         let mut next_tick = Instant::now() + self.interval;
 
         loop {
@@ -56,7 +67,7 @@ impl Simulation{
                         }
                     }
                     Err(RecvTimeoutError::Timeout) => {
-                        self.universe.tick();
+                        self.advance_one_generation();
                         self.publish_snapshot();
 
                         // 推进下一次截止时间，并防止卡顿后出现“追赶式连跳”
@@ -70,6 +81,14 @@ impl Simulation{
                 }
             }
         }
+    }
+
+    fn advance_one_generation(&mut self) {
+        if self.history.len() == MAX_HISTORY {
+            self.history.pop_front();
+        }
+        self.history.push_back(self.current_snapshot());
+        self.universe.tick();
     }
 
     /// 处理控制指令，返回 true 表示世界状态发生变更需要重新渲染
@@ -87,19 +106,50 @@ impl Simulation{
                 }
                 false
             }
+            SimCommand::Step => {
+                // 单步调试时自动进入暂停状态，方便逐帧观察
+                self.paused = true;
+                self.advance_one_generation();
+                true
+            }
+            SimCommand::Rewind => {
+                if let Some(prev) = self.history.pop_back() {
+                    // 回退时自动暂停，防止刚退回去又立刻被定时器往前推走
+                    self.paused = true;
+                    self.universe.restore(&prev);
+                    true
+                } else {
+                    false
+                }
+            }
             SimCommand::Clear => {
+                if self.history.len() == MAX_HISTORY {
+                    self.history.pop_front();
+                }
+                self.history.push_back(self.current_snapshot());
                 self.universe.clear();
                 true
             }
-            SimCommand::SetInterval(new_interval) => {
-                self.interval = new_interval;
+            SimCommand::AdjustSpeed(factor) => {
+                let new_secs = (self.interval.as_secs_f64() * factor)
+                    .clamp(MIN_INTERVAL.as_secs_f64(), MAX_INTERVAL.as_secs_f64());
+                self.interval = Duration::from_secs_f64(new_secs);
                 *next_tick = Instant::now() + self.interval;
-                false
+                true
+            }
+            SimCommand::SetRule(rule) => {
+                self.universe.set_rule(rule);
+                true
             }
         }
     }
 
+    fn current_snapshot(&self) -> Snapshot {
+        self.universe
+            .snapshot(self.paused, self.interval.as_millis() as u64)
+    }
+
     fn publish_snapshot(&self){
-        let _ = self.state_tx.try_send(self.universe.snapshot(self.paused));
+        let _ = self.state_tx.try_send(self.current_snapshot());
     }
 }
