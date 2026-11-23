@@ -10,16 +10,9 @@ live -> 1 dead -> 0
 
 download rle file from this wiki: https://conwaylife.com/wiki/
  */
-mod universe; // 告诉编译器去加载同级目录下的 universe.rs
-mod gui;
-mod sim;
-mod pattern;
-mod keymap;
-
 use crossbeam::channel::{bounded, unbounded};
-use sim::Simulation;
+use life_game_rust::{gui::LifeApp, sim::Simulation, universe::Universe};
 use std::{thread, time::Duration};
-use universe::Universe;
 
 fn main() {
     let (state_tx, state_rx) = bounded(1);
@@ -40,5 +33,5 @@ fn main() {
         Simulation::new(universe, Duration::from_millis(60), cmd_rx, state_tx).run();
     });
 
-    gui::LifeApp::new(state_rx, cmd_tx).run();
+    LifeApp::new(state_rx, cmd_tx).run();
 }

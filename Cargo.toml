@@ -5,4 +5,9 @@ edition = "2024"
 
 [dependencies]
 crossbeam = "0.8"
-eframe = { version = "0.37", features = ["default_fonts"] }
+eframe = { version = "0.37", default-features = false, features = [
+    "accesskit",
+    "default_fonts",
+    "glow",
+    "persistence",
+] }
