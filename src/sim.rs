@@ -9,7 +9,6 @@ const MIN_INTERVAL: Duration = Duration::from_millis(5);
 const MAX_INTERVAL: Duration = Duration::from_millis(1000);
 
 pub enum SimCommand {
-    SetCell(Coord, bool),
     SetCells(Vec<Coord>, bool), // 新增：批量设置细胞（对称画笔 / 随机汤）
     PlacePattern(Coord, Arc<Vec<Coord>>), // 新增：批量放置图样
     TogglePause,
@@ -87,10 +86,7 @@ impl Simulation{
     }
 
     fn advance_one_generation(&mut self) {
-        if self.history.len() == MAX_HISTORY {
-            self.history.pop_front();
-        }
-        self.history.push_back(self.current_snapshot());
+        self.update_history();
         self.universe.tick();
     }
 
@@ -104,10 +100,6 @@ impl Simulation{
     /// 处理控制指令，返回 true 表示世界状态发生变更需要重新渲染
     fn handle_command(&mut self, cmd: SimCommand, next_tick: &mut Instant) -> bool {
         match cmd {
-            SimCommand::SetCell(coord, alive) => {
-                self.universe.set_cell(coord, alive);
-                true
-            }
             SimCommand::SetCells(coords, alive) => {
                 // 若一次性批量生成较多细胞（如随机汤），先存入历史栈方便按 Z 撤回
                 if coords.len() > 8 {

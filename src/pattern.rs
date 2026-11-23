@@ -2,6 +2,52 @@ use crate::universe::Coord;
 use std::{fmt::format, fs, path::Path, sync::Arc};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Bound {
+    pub min_x: isize,
+    pub max_x: isize,
+    pub min_y: isize,
+    pub max_y: isize,
+}
+
+impl Bound {
+    pub fn from_coords(coords: &[Coord]) -> Option<Self> {
+        let (min_x, max_x) = coords
+            .iter()
+            .fold((isize::MAX, isize::MIN), |(mn, mx), &(cx, _)|{
+                (mn.min(cx), mx.max(cx))
+            });
+    
+        let (min_y, max_y) = coords
+            .iter()
+            .fold((isize::MAX, isize::MIN), |(mn, mx), &(_, cy)|{
+                (mn.min(cy), mx.max(cy))
+            });
+
+        Some(Self { min_x, max_x, min_y, max_y })
+    }
+
+    pub fn center(&self) -> (isize, isize) {
+        ((self.min_x + self.max_x) / 2, (self.min_y + self.max_y) / 2)
+    }
+
+    /// 把 `coords` 平移到以本包围盒中心为原点。
+    pub fn center_coords(&self, coords: &[Coord]) -> Vec<Coord> {
+        let (cx, cy) = self.center();
+        coords.iter().map(|&(x, y)| (x - cx, y - cy)).collect()
+    }
+
+    pub fn width(&self) -> usize {
+        (self.max_x - self.min_x + 1) as usize
+    }
+
+    pub fn height(&self) -> usize {
+        (self.max_y - self.min_y + 1) as usize
+    }
+}
+
+
 #[derive(Clone)]
 pub struct Pattern {
     pub name: String,
@@ -64,30 +110,7 @@ impl Pattern {
             }
         }
 
-        let (min_x, max_x) = raw_cells
-            .iter()
-            .fold((isize::MAX, isize::MIN), |(mn, mx), &(cx, _)|{
-                (mn.min(cx), mx.max(cx))
-            });
-    
-        let (min_y, max_y) = raw_cells
-            .iter()
-            .fold((isize::MAX, isize::MIN), |(mn, mx), &(_, cy)|{
-                (mn.min(cy), mx.max(cy))
-            });
-
-        let center_x = (min_x + max_x) / 2;
-        let center_y = (min_y + max_y) / 2;
-    
-        let centered = raw_cells
-            .into_iter()
-            .map(|(cx, cy)| (cx - center_x, cy - center_y))
-            .collect();
-
-        Ok(Self {
-            name,
-            cells: Arc::new(centered)
-        })
+        Pattern::from_slice(&name, &raw_cells)     
     }
 
     pub fn from_file(path: &Path) -> Result<Self, String> {
@@ -141,31 +164,17 @@ impl Pattern {
             .collect()
     }
 
-    pub fn from_slice(name: &str, raw_cells: &[Coord]) -> Option<Self> {
+    pub fn from_slice(name: &str, raw_cells: &[Coord]) -> Result<Self, String> {
         if raw_cells.is_empty() {
-            return None;
+            return Err("pattern contains no cells".to_string());
         }
 
-        let (min_x, max_x) = raw_cells
-            .iter()
-            .fold((isize::MAX, isize::MIN), |(mn, mx), &(cx, _)| {
-                (mn.min(cx), mx.max(cx))
-            });
-        let (min_y, max_y) = raw_cells
-            .iter()
-            .fold((isize::MAX, isize::MIN), |(mn, mx), &(_, cy)| {
-                (mn.min(cy), mx.max(cy))
-            });
+        let bound = Bound::from_coords(&raw_cells)
+            .ok_or_else(|| "pattern contains no cells".to_string())?;
+        
+        let centered = bound.center_coords(raw_cells);
 
-        let center_x = (min_x + max_x) / 2;
-        let center_y = (min_y + max_y) / 2;
-
-        let centered = raw_cells
-            .iter()
-            .map(|&(cx, cy)| (cx - center_x, cy - center_y))
-            .collect();
-
-        Some(Self {
+        Ok(Self {
             name: name.to_string(),
             cells: Arc::new(centered),
         })

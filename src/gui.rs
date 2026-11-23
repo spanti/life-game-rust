@@ -294,11 +294,17 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
                             .filter(|&(x, y)| (min_x..=max_x).contains(&x) && (min_y..=max_y).contains(&y))
                             .collect();
 
-                        if let Some(pat) = Pattern::from_slice("Copied Selection", &selected_cells) {
-                            active_pattern = Some(pat);
-                            selection = None;
-                            status_toast = Some(format!("Copied {} cells to stamp", selected_cells.len()));
-                            hud_dirty = true;
+                        match Pattern::from_slice("Copied Selection", &selected_cells) {
+                            Ok(pat) => {
+                                active_pattern = Some(pat);
+                                selection = None;
+                                status_toast = Some(format!("Copied {} cells to stamp", selected_cells.len()));
+                                hud_dirty = true;
+                            }
+                            Err(msg) => {
+                                status_toast = Some(format!("Copied {} cells to stamp", selected_cells.len()));
+                                hud_dirty = true;
+                            }
                         }
                     }
                 }
@@ -322,12 +328,17 @@ pub fn run(state_rx: Receiver<Snapshot>, cmd_tx: Sender<SimCommand>) {
                         snapshot.cells.iter().copied().collect()
                     };
 
-                    if let Some(pat) = Pattern::from_slice("Exported Pattern", &export_cells) {
-                        match pat.save_to_timestamped_file(snapshot.rule.notation) {
-                            Ok(filename) => status_toast = Some(format!("Saved: {}", filename)),
-                            Err(e) => status_toast = Some(e),
+                    match Pattern::from_slice("Exported Pattern", &export_cells) {
+                        Ok(pat) => {
+                            match pat.save_to_timestamped_file(snapshot.rule.notation) {
+                                Ok(filename) => status_toast = Some(format!("Saved: {}", filename)),
+                                Err(e) => status_toast = Some(e),
+                            }
+                            hud_dirty = true;
                         }
-                        hud_dirty = true;
+                        Err(msg) => {
+                            status_toast = Some(format!("Exported failed: {msg}"));
+                        }
                     }
                 }
                 Button::Mouse(MouseButton::Middle) => {
