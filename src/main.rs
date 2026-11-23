@@ -14,6 +14,7 @@ mod universe; // 告诉编译器去加载同级目录下的 universe.rs
 mod gui;
 mod sim;
 mod pattern;
+mod keymap;
 
 use crossbeam::channel::{bounded, unbounded};
 use sim::Simulation;
@@ -39,5 +40,5 @@ fn main() {
         Simulation::new(universe, Duration::from_millis(60), cmd_rx, state_tx).run();
     });
 
-    gui::App::new(state_rx, cmd_tx).run();
+    gui::LifeApp::new(state_rx, cmd_tx).run();
 }
