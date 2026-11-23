@@ -39,5 +39,5 @@ fn main() {
         Simulation::new(universe, Duration::from_millis(60), cmd_rx, state_tx).run();
     });
 
-    gui::run(state_rx, cmd_tx);
+    gui::App::new(state_rx, cmd_tx).run();
 }
