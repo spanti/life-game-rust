@@ -70,17 +70,10 @@ fn generate_random_soup((cx, cy): Coord) -> Vec<Coord> {
         z ^ (z >> 31)
     };
 
-    let half = 16isize;
-    let mut cells = Vec::with_capacity(350);
-    for dy in -half..half {
-        for dx in -half..half {
-            if (next_rand() % 100) < 32 {
-                cells.push((cx + dx, cy + dy));
-            }
-        }
-    }
-
-    cells
+    (-16..16)
+        .flat_map(|dy| (-16..16).map(move |dx| (cx + dx, cy + dy)))
+        .filter(|_| (next_rand() % 100) < 32)
+        .collect()
 }
 
 struct Camera {
@@ -101,9 +94,9 @@ impl Camera {
         self.cell_size = DEFAULT_CELL_SIZE;
     }
 
-    fn screen_to_world(&self, screen: Pos2) -> Coord {
-        let wx = ((f64::from(screen.x) - self.offset[0]) / self.cell_size).floor() as isize;
-        let wy = ((f64::from(screen.y) - self.offset[1]) / self.cell_size).floor() as isize;
+    fn screen_to_world(&self, p: Pos2) -> Coord {
+        let wx = ((f64::from(p.x) - self.offset[0]) / self.cell_size).floor() as isize;
+        let wy = ((f64::from(p.y) - self.offset[1]) / self.cell_size).floor() as isize;
         (wx, wy)
     }
 
@@ -115,22 +108,18 @@ impl Camera {
     }
 
     fn zoom_at(&mut self, cursor: Pos2, factor: f64) {
+        let new_size = (self.cell_size * factor).clamp(MIN_CELL_SIZE, MAX_CELL_SIZE);
+        let ratio = new_size / self.cell_size;
         let cursor = [f64::from(cursor.x), f64::from(cursor.y)];
-        let old_size = self.cell_size;
-        let new_size = (old_size * factor).clamp(MIN_CELL_SIZE, MAX_CELL_SIZE);
-        let ratio = new_size / old_size;
-
         self.offset[0] = cursor[0] - (cursor[0] - self.offset[0]) * ratio;
         self.offset[1] = cursor[1] - (cursor[1] - self.offset[1]) * ratio;
         self.cell_size = new_size;
     }
 
     fn visible_bounds(&self, rect: Rect) -> (isize, isize, isize, isize) {
-        let min_x = ((f64::from(rect.left()) - self.offset[0]) / self.cell_size).floor() as isize;
-        let max_x = ((f64::from(rect.right()) - self.offset[0]) / self.cell_size).ceil() as isize;
-        let min_y = ((f64::from(rect.top()) - self.offset[1]) / self.cell_size).floor() as isize;
-        let max_y = ((f64::from(rect.bottom()) - self.offset[1]) / self.cell_size).ceil() as isize;
-        (min_x, max_x, min_y, max_y)
+        let (min_x, min_y) = self.screen_to_world(rect.min);
+        let (max_x, max_y) = self.screen_to_world(rect.max);
+        (min_x, max_x + 1, min_y, max_y + 1)
     }
 }
 
@@ -205,6 +194,29 @@ impl LifeApp {
             }),
         )
         .expect("无法创建 egui 窗口");
+    }
+
+    fn send_command(&self, cmd: SimCommand) {
+        let _ = self.cmd_tx.send(cmd);
+    }
+
+    fn selection_cells(&self, fallback_all: bool) -> Option<Vec<Coord>> {
+        if let Some((p1, p2)) = self.selection {
+            let (x0, x1) = (p1.0.min(p2.0), p1.0.max(p2.0));
+            let (y0, y1) = (p1.1.min(p2.1), p1.1.max(p2.1));
+            Some(
+                self.snapshot
+                    .cells
+                    .iter()
+                    .copied()
+                    .filter(|&(x, y)| (x0..=x1).contains(&x) && (y0..=y1).contains(&y))
+                    .collect(),
+            )
+        } else if fallback_all {
+            Some(self.snapshot.cells.iter().copied().collect())
+        } else {
+            None
+        }
     }
 
     fn handle_file_drop(&mut self, ctx: &Context) {
@@ -293,9 +305,7 @@ impl LifeApp {
             let coord = self.camera.screen_to_world(pos);
             if self.last_painted != Some(coord) {
                 let expanded = self.symmetry.expand(coord);
-                let _ = self
-                    .cmd_tx
-                    .send(SimCommand::SetCells(expanded, target_alive));
+                self.send_command(SimCommand::SetCells(expanded, target_alive));
                 self.last_painted = Some(coord);
             }
         }
@@ -320,9 +330,7 @@ impl LifeApp {
                     self.active_pattern = None;
                     self.paint_brush = None;
                 } else if let Some(pat) = &self.active_pattern {
-                    let _ = self
-                        .cmd_tx
-                        .send(SimCommand::PlacePattern(coord, Arc::clone(&pat.cells)));
+                    self.send_command(SimCommand::PlacePattern(coord, Arc::clone(&pat.cells)));
                     if !modifiers.shift {
                         self.active_pattern = None;
                         self.hud_dirty = true;
@@ -333,9 +341,7 @@ impl LifeApp {
                     self.paint_brush = Some(target_alive);
                     self.last_painted = Some(coord);
                     let expanded = self.symmetry.expand(coord);
-                    let _ = self
-                        .cmd_tx
-                        .send(SimCommand::SetCells(expanded, target_alive));
+                    self.send_command(SimCommand::SetCells(self.symmetry.expand(coord), target_alive));
                 }
             }
             PointerButton::Secondary => {
@@ -364,120 +370,60 @@ impl LifeApp {
 
     fn handle_key(&mut self, key: Key, ctrl: bool, window_center: Pos2) {
         let show_help = Cell::new(false);
+        let next_help_open = !self.help_open;
+        let needs_help_text = next_help_open && self.help_text.is_none();
 
         let mut dispatch_keys = |pressed: Option<(Key, bool)>, kb: &mut KeyRegistry| {
             // --- 时间与模拟控制 ---
-            if kb.bind(
-                pressed,
-                (Key::Space, false),
-                "时间控制",
-                "Space",
-                "暂停 / 继续演化",
-            ) {
-                let _ = self.cmd_tx.send(SimCommand::TogglePause);
+            if kb.bind(pressed, (Key::Space, false), "时间控制", "Space", "暂停 / 继续演化") {
+                self.send_command(SimCommand::TogglePause);
                 self.status_toast = None;
             }
-            if kb.bind(
-                pressed,
-                (Key::N, false),
-                "时间控制",
-                "N / →",
-                "暂停并单步推演一代",
-            ) || pressed == Some((Key::ArrowRight, false))
+            if kb.bind(pressed, (Key::N, false), "时间控制", "N / →", "暂停并单步推演一代")
+                || pressed == Some((Key::ArrowRight, false))
             {
-                let _ = self.cmd_tx.send(SimCommand::Step);
+                self.send_command(SimCommand::Step);
             }
-            if kb.bind(
-                pressed,
-                (Key::Z, false),
-                "时间控制",
-                "Z / ←",
-                "时光倒流回退一代",
-            ) || pressed == Some((Key::ArrowLeft, false))
+            if kb.bind(pressed, (Key::Z, false), "时间控制", "Z / ←", "时光倒流回退一代")
+                || pressed == Some((Key::ArrowLeft, false))
             {
-                let _ = self.cmd_tx.send(SimCommand::Rewind);
+                self.send_command(SimCommand::Rewind);
             }
-            if kb.bind(
-                pressed,
-                (Key::Equals, false),
-                "时间控制",
-                "+ / ↑",
-                "加快演化速度",
-            ) || matches!(pressed, Some((Key::Plus | Key::ArrowUp, false)))
+            if kb.bind(pressed, (Key::Equals, false), "时间控制", "+ / ↑", "加快演化速度")
+                || matches!(pressed, Some((Key::Plus | Key::ArrowUp, false)))
             {
-                let _ = self.cmd_tx.send(SimCommand::AdjustSpeed(0.75));
+                self.send_command(SimCommand::AdjustSpeed(0.75));
             }
-            if kb.bind(
-                pressed,
-                (Key::Minus, false),
-                "时间控制",
-                "- / ↓",
-                "减慢演化速度",
-            ) || pressed == Some((Key::ArrowDown, false))
+            if kb.bind(pressed, (Key::Minus, false), "时间控制", "- / ↓", "减慢演化速度")
+                || pressed == Some((Key::ArrowDown, false))
             {
-                let _ = self.cmd_tx.send(SimCommand::AdjustSpeed(1.33));
+                self.send_command(SimCommand::AdjustSpeed(1.33));
             }
 
             // --- 画布与编辑 ---
-            if kb.bind(
-                pressed,
-                (Key::Home, false),
-                "画布与编辑",
-                "Home",
-                "重置视角回到原点 (0, 0)",
-            ) {
+            if kb.bind(pressed, (Key::Home, false), "画布与编辑", "Home", "重置视角回到原点 (0, 0)") {
                 self.camera.reset();
                 self.hud_dirty = true;
             }
-            if kb.bind(
-                pressed,
-                (Key::M, false),
-                "画布与编辑",
-                "M",
-                "切换对称绘制模式",
-            ) {
+            if kb.bind(pressed, (Key::M, false), "画布与编辑", "M", "切换对称绘制模式") {
                 self.symmetry = self.symmetry.next();
                 self.hud_dirty = true;
             }
-            if kb.bind(
-                pressed,
-                (Key::G, false),
-                "画布与编辑",
-                "G",
-                "在屏幕中心生成 32x32 随机汤",
-            ) {
+            if kb.bind(pressed, (Key::G, false), "画布与编辑", "G", "在屏幕中心生成 32x32 随机汤") {
                 let center = self.camera.screen_to_world(window_center);
                 let soup = generate_random_soup(center);
-                let _ = self.cmd_tx.send(SimCommand::SetCells(soup, true));
+                self.send_command(SimCommand::SetCells(soup, true));
                 self.status_toast = Some("Generated 32x32 Random Soup".into());
                 self.hud_dirty = true;
             }
-            if kb.bind(
-                pressed,
-                (Key::C, true),
-                "画布与编辑",
-                "Ctrl + C",
-                "复制框选区域为图样印章",
-            ) {
-                if let Some((p1, p2)) = self.selection {
-                    let (min_x, max_x) = (p1.0.min(p2.0), p1.0.max(p2.0));
-                    let (min_y, max_y) = (p1.1.min(p2.1), p1.1.max(p2.1));
-                    let selected_cells: Vec<Coord> = self
-                        .snapshot
-                        .cells
-                        .iter()
-                        .copied()
-                        .filter(|&(x, y)| {
-                            (min_x..=max_x).contains(&x) && (min_y..=max_y).contains(&y)
-                        })
-                        .collect();
-
-                    match Pattern::from_slice("Copied Selection", &selected_cells) {
+            if kb.bind(pressed, (Key::C, true), "画布与编辑", "Ctrl + C", "复制框选区域为图样印章") {
+                if let Some(cells) = self.selection_cells(false) {
+                    match Pattern::from_slice("Copied Selection", &cells) {
                         Ok(pat) => {
                             self.active_pattern = Some(pat);
                             self.selection = None;
                             self.status_toast =
-                                Some(format!("Copied {} cells to stamp", selected_cells.len()));
+                                Some(format!("Copied {} cells to stamp", cells.len()));
                             self.hud_dirty = true;
                         }
                         Err(msg) => {
@@ -487,60 +433,36 @@ impl LifeApp {
                     }
                 }
             }
-            if kb.bind(
-                pressed,
-                (Key::S, true),
-                "画布与编辑",
-                "Ctrl + S",
-                "导出框选或全图为 .rle 文件",
-            ) {
-                let export_cells: Vec<Coord> = if let Some((p1, p2)) = self.selection {
-                    let (min_x, max_x) = (p1.0.min(p2.0), p1.0.max(p2.0));
-                    let (min_y, max_y) = (p1.1.min(p2.1), p1.1.max(p2.1));
-                    self.snapshot
-                        .cells
-                        .iter()
-                        .copied()
-                        .filter(|&(x, y)| {
-                            (min_x..=max_x).contains(&x) && (min_y..=max_y).contains(&y)
-                        })
-                        .collect()
-                } else {
-                    self.snapshot.cells.iter().copied().collect()
-                };
-
-                match Pattern::from_slice("Exported Pattern", &export_cells) {
-                    Ok(pat) => {
-                        match pat.save_to_timestamped_file(self.snapshot.rule.notation) {
-                            Ok(filename) => {
-                                self.status_toast = Some(format!("Saved: {}", filename))
+            if kb.bind(pressed, (Key::S, true), "画布与编辑", "Ctrl + S", "导出框选或全图为 .rle 文件") {
+                if let Some(cells) = self.selection_cells(true) {
+                    match Pattern::from_slice("Exported Pattern", &cells) {
+                        Ok(pat) => {
+                            match pat.save_to_timestamped_file(self.snapshot.rule.notation) {
+                                Ok(filename) => {
+                                    self.status_toast = Some(format!("Saved: {}", filename))
+                                }
+                                Err(e) => self.status_toast = Some(e),
                             }
-                            Err(e) => self.status_toast = Some(e),
+                            self.hud_dirty = true;
                         }
-                        self.hud_dirty = true;
-                    }
-                    Err(msg) => {
-                        self.status_toast = Some(format!("Export failed: {msg}"));
-                        self.hud_dirty = true;
+                        Err(msg) => {
+                            self.status_toast = Some(format!("Export failed: {msg}"));
+                            self.hud_dirty = true;
+                        }
                     }
                 }
             }
             if kb.bind(pressed, (Key::C, false), "画布与编辑", "C", "清空当前画布") {
                 self.selection = None;
-                let _ = self.cmd_tx.send(SimCommand::Clear);
+                self.send_command(SimCommand::Clear);
             }
 
             // --- 图样印章 ---
-            if kb.bind(
-                pressed,
-                (Key::Num1, false),
-                "图样印章",
-                "1 ~ 5",
-                "选择内置预设图样",
-            ) || matches!(
-                pressed,
-                Some((Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5, false))
-            ) {
+            if kb.bind(pressed, (Key::Num1, false), "图样印章", "1 ~ 5", "选择内置预设图样")
+                || matches!(
+                    pressed,
+                    Some((Key::Num2 | Key::Num3 | Key::Num4 | Key::Num5, false)))
+            {
                 let idx = match pressed {
                     Some((Key::Num1, _)) => 0,
                     Some((Key::Num2, _)) => 1,
@@ -555,35 +477,17 @@ impl LifeApp {
                     self.hud_dirty = true;
                 }
             }
-            if kb.bind(
-                pressed,
-                (Key::R, false),
-                "图样印章",
-                "R",
-                "顺时针旋转图样 90°",
-            ) {
+            if kb.bind(pressed, (Key::R, false), "图样印章", "R", "顺时针旋转图样 90°"){
                 if let Some(pat) = &mut self.active_pattern {
                     pat.rotate_cw();
                 }
             }
-            if kb.bind(
-                pressed,
-                (Key::F, false),
-                "图样印章",
-                "F",
-                "水平镜像翻转图样",
-            ) {
+            if kb.bind(pressed, (Key::F, false), "图样印章", "F", "水平镜像翻转图样"){
                 if let Some(pat) = &mut self.active_pattern {
                     pat.flip_horizontal();
                 }
             }
-            if kb.bind(
-                pressed,
-                (Key::Backspace, false),
-                "图样印章",
-                "Backspace",
-                "取消当前图样预览",
-            ) {
+            if kb.bind(pressed, (Key::Backspace, false), "图样印章", "Backspace", "取消当前图样预览"){
                 if self.active_pattern.take().is_some() {
                     self.hud_dirty = true;
                 }
@@ -597,24 +501,18 @@ impl LifeApp {
                 "F1 ~ F4",
                 "切换元胞规则 (Conway / HighLife / Seeds / Day&Night)",
             ) {
-                let _ = self.cmd_tx.send(SimCommand::SetRule(Rule::CONWAY));
+                self.send_command(SimCommand::SetRule(Rule::CONWAY));
             }
             if pressed == Some((Key::F2, false)) {
-                let _ = self.cmd_tx.send(SimCommand::SetRule(Rule::HIGH_LIFE));
+                self.send_command(SimCommand::SetRule(Rule::HIGH_LIFE));
             }
             if pressed == Some((Key::F3, false)) {
-                let _ = self.cmd_tx.send(SimCommand::SetRule(Rule::SEEDS));
+                self.send_command(SimCommand::SetRule(Rule::SEEDS));
             }
             if pressed == Some((Key::F4, false)) {
-                let _ = self.cmd_tx.send(SimCommand::SetRule(Rule::DAY_AND_NIGHT));
+                self.send_command(SimCommand::SetRule(Rule::DAY_AND_NIGHT));
             }
-            if kb.bind(
-                pressed,
-                (Key::F5, false),
-                "规则与系统",
-                "F5",
-                "打开 / 关闭快捷键帮助窗口",
-            ) {
+            if kb.bind(pressed, (Key::F5, false), "规则与系统", "F5", "打开 / 关闭快捷键帮助窗口"){
                 show_help.set(true);
             }
         };
@@ -623,10 +521,13 @@ impl LifeApp {
         dispatch_keys(Some((key, ctrl)), &mut live_kb);
 
         if show_help.get() {
-            self.help_open = !self.help_open;
-            if self.help_open && self.help_text.is_none() {
-                self.help_text = Some(KeyRegistry::collect_help(dispatch_keys));
+            if needs_help_text {
+                let help_text = KeyRegistry::collect_help(dispatch_keys);
+                self.help_text = Some(help_text);
+            } else {
+                drop(dispatch_keys);
             }
+            self.help_open = next_help_open;
         }
     }
 
